@@ -1,0 +1,147 @@
+import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
+import { credentials } from './accounts.js';
+
+// One open connection per account, reused for every read and action: logging in to
+// Gmail/Yahoo costs 2–3 s and selecting a folder ~1 s, far more than the work itself.
+// Commands on a connection run one at a time (a queue); a dropped connection is replaced
+// on the next call. Folders are opened read-write: imapflow fetches with BODY.PEEK, so
+// reading never marks mail as read by itself.
+const pool = new Map();
+
+function connection(account) {
+  const entry = pool.get(account.id);
+  if (entry && entry.client.usable !== false) return entry;
+  const { user, pass } = credentials(account.service);
+  const client = new ImapFlow({ ...account.imap, secure: true, auth: { user, pass }, logger: false });
+  client.on('error', () => {}); // surfaced through the failing command; the next call reconnects
+  const fresh = { client, ready: client.connect(), queue: Promise.resolve() };
+  fresh.ready.catch(() => pool.delete(account.id));
+  pool.set(account.id, fresh);
+  return fresh;
+}
+
+// Runs fn(client) on the account's connection, queued behind earlier commands.
+function withClient(account, fn) {
+  const entry = connection(account);
+  const run = entry.queue.then(() => entry.ready).then(() => fn(entry.client));
+  entry.queue = run.catch(() => {});
+  run.catch(() => { if (entry.client.usable === false) pool.delete(account.id); });
+  return run;
+}
+
+// Runs fn(client, mailbox) with `folder` selected (re-selected only when it changes).
+function withFolder(account, folder, fn) {
+  return withClient(account, async (client) => {
+    if (client.mailbox?.path !== folder) await client.mailboxOpen(folder);
+    return fn(client, client.mailbox);
+  });
+}
+
+function summary(account, folder, msg) {
+  const sender = msg.envelope.from?.[0] ?? {};
+  return {
+    account: account.id,
+    folder,
+    uid: msg.uid,
+    date: msg.envelope.date,
+    from: { name: sender.name || '', address: (sender.address || '').toLowerCase() },
+    subject: msg.envelope.subject || '(no subject)',
+    seen: msg.flags.has('\\Seen'),
+    flagged: msg.flags.has('\\Flagged'),
+  };
+}
+
+// Newest `limit` messages in a folder for one account, as plain summaries.
+export function fetchInbox(account, limit, folder = 'INBOX') {
+  return withFolder(account, folder, async (client, box) => {
+    if (box.exists === 0) return [];
+    const from = Math.max(1, box.exists - limit + 1);
+    const messages = [];
+    for await (const msg of client.fetch(`${from}:*`, { uid: true, envelope: true, flags: true })) {
+      messages.push(summary(account, folder, msg));
+    }
+    return messages;
+  });
+}
+
+// Summaries of messages matching any of `criteria` (imapflow search objects) since `since`.
+// The server does the searching, so this reaches past the newest-N window.
+// `max` keeps only the newest matches, so a broad search doesn't fetch thousands of envelopes.
+export function searchInbox(account, criteria, since, folder = 'INBOX', max = Infinity) {
+  return withFolder(account, folder, async (client) => {
+    // Yahoo's OR both misses and over-matches, so each criterion is its own search and the
+    // UIDs are merged. Yahoo also matches whole words only: callers re-check results.
+    const found = new Set();
+    for (const criterion of criteria) {
+      for (const uid of (await client.search({ ...criterion, since }, { uid: true })) || []) found.add(uid);
+    }
+    const uids = [...found].sort((a, b) => a - b).slice(-max);
+    if (!uids.length) return [];
+    const messages = [];
+    for await (const msg of client.fetch(uids, { uid: true, envelope: true, flags: true }, { uid: true })) {
+      messages.push(summary(account, folder, msg));
+    }
+    return messages;
+  });
+}
+
+export function setSeen(account, uid, seen, folder = 'INBOX') {
+  return setFlag(account, folder, [uid], '\\Seen', seen);
+}
+
+// Adds or removes one flag (\Seen, \Flagged) on many messages in one folder.
+export function setFlag(account, folder, uids, flag, on) {
+  return withFolder(account, folder, (client) => (on
+    ? client.messageFlagsAdd(uids, [flag], { uid: true })
+    : client.messageFlagsRemove(uids, [flag], { uid: true })));
+}
+
+// Archive and Trash differ per provider (Gmail: [Gmail]/All Mail and [Gmail]/Trash; Yahoo:
+// Archive and Trash), so they're found by their IMAP special-use flag once and cached.
+const specialFolders = new Map();
+export async function specialFolder(account, use) {
+  const key = `${account.id}:${use}`;
+  if (!specialFolders.has(key)) {
+    for (const box of await withClient(account, (client) => client.list())) {
+      if (box.specialUse) specialFolders.set(`${account.id}:${box.specialUse}`, box.path);
+    }
+  }
+  const path = specialFolders.get(key);
+  if (!path) throw new Error(`${account.id} has no ${use} folder`);
+  return path;
+}
+
+// Moves messages to another folder. Returns their new UIDs there (for undo), in input order.
+export function moveMessages(account, folder, uids, destination) {
+  return withFolder(account, folder, async (client) => {
+    const result = await client.messageMove(uids, destination, { uid: true });
+    return uids.map((uid) => result?.uidMap?.get(uid) ?? null);
+  });
+}
+
+// One full message, parsed. Downloading holds the account's connection; parsing doesn't.
+// markSeen flags it as read in the background, so opening never waits for that.
+export async function fetchMessage(account, uid, { markSeen = true, folder = 'INBOX' } = {}) {
+  const source = await withFolder(account, folder, async (client) => (await client.fetchOne(uid, { source: true }, { uid: true }))?.source);
+  if (!source) return null;
+  if (markSeen) setFlag(account, folder, [uid], '\\Seen', true).catch(() => {});
+  const parsed = await simpleParser(source, { skipImageLinks: true });
+  return {
+    account: account.id,
+    folder,
+    uid,
+    messageId: parsed.messageId || '',
+    references: [parsed.references ?? []].flat(),
+    date: parsed.date,
+    from: parsed.from?.value?.[0] ?? { name: '', address: '' },
+    to: parsed.to ? [parsed.to].flat().flatMap((t) => t.value) : [],
+    cc: parsed.cc ? [parsed.cc].flat().flatMap((t) => t.value) : [],
+    subject: parsed.subject || '(no subject)',
+    html: parsed.html || '',
+    text: parsed.text || '',
+    attachments: parsed.attachments
+      .filter((a) => a.contentDisposition !== 'inline')
+      .map((a) => ({ filename: a.filename || 'attachment', size: a.size, contentType: a.contentType })),
+  };
+}

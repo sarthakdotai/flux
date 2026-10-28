@@ -1,0 +1,20 @@
+# systemd unit for running Flux on a Linux server. Install to /etc/systemd/system/flux.service,
+# then: sudo systemctl daemon-reload && sudo systemctl enable --now flux
+[Unit]
+Description=Flux mail server (IMAP IDLE, web push, UI on 127.0.0.1:3030)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/flux
+# FLUX_GMAIL_USER / FLUX_GMAIL_PASS / FLUX_YAHOO_USER / FLUX_YAHOO_PASS (chmod 600)
+EnvironmentFile=/opt/flux/.env
+ExecStart=/opt/node/bin/node server.js
+Restart=always
+RestartSec=5
+MemoryMax=250M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

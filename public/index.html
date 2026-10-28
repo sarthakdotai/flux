@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flux</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <meta name="theme-color" content="#0B0B0B">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Inter Tight stands in for Suisse Intl until it is licensed. -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="asterisk" viewBox="-12 -12 24 24">
+      <path fill="currentColor" d="M-2.05 -0.44L-0.7 -10.68L5.27 -10.84L2.05 0.44ZM-0.65 -2L8.14 -5.69L11.26 -0.61L0.65 2ZM1.41 -1.56L9.45 4.6L6.61 9.85L-1.41 1.56ZM2.05 0.44L0.82 10.09L-5.14 10.25L-2.05 -0.44ZM0.65 2L-9.09 6L-12.21 0.92L-0.65 -2ZM-1.41 1.56L-8.78 -4L-5.94 -9.25L1.41 -1.56ZM1.74 -1.93L2.54 0.54L0.8 2.47L-1.74 1.93L-2.54 -0.54L-0.8 -2.47Z"/>
+    </symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5Z"/><path d="M3 8l9 5 9-5M12 13v8"/></g></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3"/></g></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></g></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></g></symbol>
+  </svg>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="wordmark">flux<svg class="mark"><use href="#asterisk"/></svg></div>
+      <nav id="account-nav">
+        <button class="nav-item active" data-account="all"><span>Inbox</span><span class="count" id="unread-count"></span></button>
+        <button class="nav-item" data-account="gmail"><span class="acct gmail" aria-hidden="true">G</span><span>Gmail</span><span class="status" data-status="gmail"></span></button>
+        <button class="nav-item" data-account="yahoo"><span class="acct yahoo" aria-hidden="true">Y</span><span>Yahoo</span><span class="status" data-status="yahoo"></span></button>
+      </nav>
+      <p class="tagline">Email for<br>what’s next.</p>
+    </aside>
+
+    <main class="main">
+      <!-- Inbox -->
+      <section id="list-view">
+        <header class="main-head">
+          <div class="mobile-mark">flux<svg class="mark"><use href="#asterisk"/></svg></div>
+          <h1>Inbox</h1>
+          <form class="search" id="search-form" role="search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="search" type="search" placeholder="Search  /" aria-label="Search mail" autocomplete="off">
+          </form>
+          <button class="icon-btn" id="bell" aria-label="Turn on notifications" title="Turn on notifications">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+          </button>
+          <button class="icon-btn" id="refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+        </header>
+
+        <div class="smart" id="smart" hidden>
+          <button class="chip" id="chip" aria-expanded="false"></button>
+          <ul class="shipments" id="shipments" hidden></ul>
+        </div>
+
+        <div class="toolbar" id="toolbar">
+          <button class="check" id="select-all" role="checkbox" aria-checked="false" aria-label="Select all" title="Select all  (⇧A)"></button>
+          <div class="pills" role="tablist" id="pills">
+            <button class="pill active" data-view="focused" role="tab">Focused</button>
+            <button class="pill" data-view="other" role="tab">Other <span class="pill-count" id="other-count"></span></button>
+          </div>
+          <div class="filters" id="filters">
+            <button class="filter" data-filter="unread" aria-pressed="false">Unread</button>
+            <button class="filter" data-filter="starred" aria-pressed="false">★ Starred</button>
+          </div>
+          <button class="link-btn" id="mark-all-read">Mark all read</button>
+        </div>
+
+        <div class="bulkbar" id="bulkbar" hidden>
+          <button class="check" id="bulk-all" role="checkbox" aria-checked="true" aria-label="Select all"></button>
+          <span class="bulk-count" id="bulk-count"></span>
+          <div class="bulk-actions">
+            <button data-bulk="read">Mark read</button>
+            <button data-bulk="unread">Mark unread</button>
+            <button data-bulk="star">Star</button>
+            <button data-bulk="archive">Archive</button>
+            <button data-bulk="trash">Delete</button>
+            <button data-bulk="inbox" id="bulk-notspam" hidden>Not spam</button>
+          </div>
+          <button class="bulk-close" id="bulk-clear" aria-label="Clear selection">×</button>
+        </div>
+
+        <div class="results-bar" id="results-bar" hidden>
+          <span id="results-label"></span>
+          <button id="clear-search">Clear</button>
+        </div>
+        <div class="banner" id="banner" hidden></div>
+        <ul class="list" id="list" aria-live="polite"></ul>
+        <p class="hint"><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>x</kbd> select · <kbd>⇧A</kbd> select all · <kbd>↵</kbd> open · <kbd>e</kbd> archive · <kbd>#</kbd> delete · <kbd>s</kbd> star · <kbd>⇧I</kbd> read · <kbd>⇧U</kbd> unread · <kbd>r</kbd> reply · <kbd>c</kbd> compose · <kbd>/</kbd> search</p>
+      </section>
+
+      <!-- Reader -->
+      <section id="reader-view" hidden>
+        <header class="reader-head">
+          <button class="back" id="back">← Inbox</button>
+          <div class="reader-actions">
+            <button class="btn-ghost" id="r-star" title="Star  (s)">☆ Star</button>
+            <button class="btn-ghost" id="r-archive" title="Archive  (e)">Archive</button>
+            <button class="btn-ghost" id="r-trash" title="Delete  (#)">Delete</button>
+            <button class="btn-ghost" id="mark-unread" title="Mark unread  (⇧U)">Mark unread</button>
+            <button class="btn-lime" id="reply" title="Reply  (r)">Reply</button>
+          </div>
+        </header>
+        <div id="reader"></div>
+      </section>
+    </main>
+  </div>
+
+  <button class="fab" id="compose-btn" aria-label="Compose"><svg width="22" height="22"><use href="#i-pen"/></svg></button>
+
+  <!-- Compose sheet -->
+  <div class="sheet-backdrop" id="compose" hidden>
+    <form class="sheet" id="compose-form" autocomplete="off">
+      <header class="sheet-head">
+        <div class="wordmark small">flux<svg class="mark"><use href="#asterisk"/></svg></div>
+        <button type="button" class="sheet-close" id="compose-close" aria-label="Close">×</button>
+      </header>
+      <label class="field"><span>From</span>
+        <select name="account"><option value="gmail">Gmail</option><option value="yahoo">Yahoo</option></select>
+      </label>
+      <label class="field"><span>To</span><input name="to" type="text" required placeholder="name@example.com"></label>
+      <label class="field"><span>Cc</span><input name="cc" type="text"></label>
+      <input class="subject-input" name="subject" type="text" required placeholder="Subject">
+      <textarea name="text" placeholder="Big ideas. Better buffers."></textarea>
+      <footer class="sheet-foot">
+        <span class="send-status" id="send-status" role="status"></span>
+        <button type="submit" class="send" aria-label="Send"><svg width="22" height="22"><use href="#i-send"/></svg></button>
+      </footer>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

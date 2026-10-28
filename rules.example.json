@@ -1,0 +1,61 @@
+{
+  "focusedAccounts": [
+    "gmail"
+  ],
+  "important": {
+    "senders": [
+      "alerts@yourbank.example",
+      "no-reply@your-broker.example"
+    ],
+    "domains": [],
+    "personalDomains": [
+      "gmail.com",
+      "yahoo.com",
+      "yahoo.co.in",
+      "outlook.com",
+      "hotmail.com",
+      "icloud.com",
+      "proton.me",
+      "protonmail.com"
+    ]
+  },
+  "ignore": {
+    "senders": [],
+    "domains": [
+      "swiggy.in",
+      "instamart.in"
+    ]
+  },
+  "shipping": {
+    "senderDomains": [
+      "shiprocket.in",
+      "delhivery.com",
+      "ekartlogistics.com",
+      "ekart.in",
+      "bluedart.com",
+      "shopifyemail.com"
+    ],
+    "searchFrom": [
+      "shiprocket",
+      "delhivery",
+      "ekart",
+      "bluedart",
+      "shopifyemail"
+    ],
+    "searchSubject": [
+      "shipped",
+      "out for delivery",
+      "delivered",
+      "shipment",
+      "dispatched"
+    ],
+    "subjectPattern": "(order|shipment|package|parcel|wbn|awb)[^]*(shipped|dispatched|in transit|out for delivery|delivered|not picked)|(shipped|dispatched|out for delivery|delivered)[^]*(order|shipment|package|parcel)",
+    "lookbackDays": 30,
+    "activeDays": 10,
+    "keepDeliveredHours": 24
+  },
+  "otp": {
+    "subjectPattern": "\\b(otp|one[- ]time password|verification code|login code|security code|passcode)\\b",
+    "freshMinutes": 10
+  }
+}

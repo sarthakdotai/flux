@@ -1,0 +1,19 @@
+{
+  "name": "flux",
+  "version": "0.1.0",
+  "description": "A personal Gmail + Yahoo mail client: focused inbox, shipping and OTP smart chip, live push, native Mac app.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "imapflow": "^2.9.1",
+    "mailparser": "^3.12.4",
+    "nodemailer": "^10.2.1",
+    "web-push": "^3.6.7"
+  }
+}

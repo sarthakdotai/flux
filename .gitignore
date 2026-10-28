@@ -1,0 +1,13 @@
+# Dependencies and build output
+node_modules/
+mac/build/
+
+# Private: credentials, server details, personal rules, push keys and subscriptions
+.env
+config.env
+rules.json
+data/
+
+# Local tooling
+.claude/
+.DS_Store

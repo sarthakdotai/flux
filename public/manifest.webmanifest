@@ -1,0 +1,12 @@
+{
+  "name": "Flux",
+  "short_name": "Flux",
+  "description": "Email for what's next.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F4EF",
+  "theme_color": "#0B0B0B",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
