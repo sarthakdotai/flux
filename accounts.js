@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 
-export const ACCOUNTS = [
+// Every provider Flux knows. Only the ones with credentials set up are used (see ACCOUNTS).
+const PROVIDERS = [
   {
     id: 'gmail', service: 'flux-gmail',
     imap: { host: 'imap.gmail.com', port: 993 },
@@ -14,6 +15,25 @@ export const ACCOUNTS = [
     smtp: { host: 'smtp.mail.yahoo.com', port: 465 },
   },
 ];
+
+// Set up = an env pair (FLUX_GMAIL_USER/PASS) or a Keychain item (flux-gmail). Checking the
+// Keychain item without -w doesn't read the password, so it never triggers a prompt.
+function isSetUp(service) {
+  const prefix = service.toUpperCase().replace(/-/g, '_');
+  if (process.env[`${prefix}_USER`] && process.env[`${prefix}_PASS`]) return true;
+  try {
+    execFileSync('security', ['find-generic-password', '-s', service], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The accounts this install uses: just Gmail, just Yahoo, or both.
+export const ACCOUNTS = PROVIDERS.filter((a) => isSetUp(a.service));
+if (ACCOUNTS.length === 0) {
+  console.error('No mail accounts set up. Add a Keychain item (flux-gmail / flux-yahoo) or FLUX_*_USER/PASS; see README.');
+}
 
 export function account(id) {
   const found = ACCOUNTS.find((a) => a.id === id);

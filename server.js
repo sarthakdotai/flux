@@ -60,7 +60,11 @@ function events(req, res) {
 async function inbox(url, res) {
   const limit = Math.min(Number(url.searchParams.get('limit')) || 100, MAX_LIMIT);
   await store.ready;
-  send(res, 200, { messages: store.messages().sort(byDateDesc).slice(0, limit), errors: store.errors() });
+  send(res, 200, {
+    messages: store.messages().sort(byDateDesc).slice(0, limit),
+    errors: store.errors(),
+    accounts: ACCOUNTS.map((a) => a.id),
+  });
 }
 
 // Recently fetched messages (contents never change for a UID), so opening one the app

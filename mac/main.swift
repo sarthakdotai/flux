@@ -9,6 +9,22 @@ import WebKit
 
 let base = URL(string: "http://localhost:3030")!
 
+/// Appends a line to ~/Library/Application Support/Flux/app.log (notifications, server choice),
+/// so "why didn't I get a notification?" has an answer.
+func appLog(_ line: String) {
+    let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Flux")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appendingPathComponent("app.log")
+    let entry = Data("\(ISO8601DateFormatter().string(from: Date()))  \(line)\n".utf8)
+    if let handle = try? FileHandle(forWritingTo: file) {
+        handle.seekToEndOfFile()
+        handle.write(entry)
+        try? handle.close()
+    } else {
+        try? entry.write(to: file)
+    }
+}
+
 /// Asks the server for something tiny to see whether it's reachable (tunnel up, server up).
 func serverReachable() async -> Bool {
     var request = URLRequest(url: base.appendingPathComponent("api/push/key"))
@@ -196,7 +212,9 @@ final class LiveFeed {
             content.interruptionLevel = .timeSensitive
         }
         let id = "\(content.userInfo["account"]!):\(content.userInfo["folder"]!):\(content.userInfo["uid"]!)"
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
+            appLog("notify \(id) \"\(title)\": \(error.map { "FAILED \($0.localizedDescription)" } ?? "posted")")
+        }
         Task { @MainActor in (NSApp.delegate as? AppDelegate)?.refreshBadge() }
     }
 }
@@ -315,7 +333,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         center.delegate = self
         let copy = UNNotificationAction(identifier: "COPY", title: "Copy code")
         center.setNotificationCategories([UNNotificationCategory(identifier: "OTP", actions: [copy], intentIdentifiers: [])])
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            appLog("notification permission: \(granted ? "granted" : "NOT granted")\(error.map { " (\($0.localizedDescription))" } ?? "")")
+            center.getNotificationSettings { settings in
+                appLog("notification settings: authorization=\(settings.authorizationStatus.rawValue) alerts=\(settings.alertSetting.rawValue)")
+            }
+        }
     }
 
     // Show banners even while Flux is in front.

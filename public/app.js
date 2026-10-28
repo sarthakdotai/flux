@@ -315,6 +315,10 @@ async function loadInbox() {
   try {
     const data = await api(`/api/inbox?limit=${LIMIT}`);
     state.messages = data.messages;
+    // Only show the accounts this install has set up (just Gmail, just Yahoo, or both).
+    document.querySelectorAll('.nav-item[data-account]').forEach((item) => {
+      item.hidden = item.dataset.account !== 'all' && !data.accounts.includes(item.dataset.account);
+    });
     showErrors(data.errors);
     renderList();
   } catch (err) {

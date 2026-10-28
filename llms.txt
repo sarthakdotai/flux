@@ -1,0 +1,215 @@
+# flux*
+
+> Flux is a lightweight, smart, beautiful inbox for macOS. One live inbox for Gmail and Yahoo, with OTPs and shipments pulled out of the pile, and notifications only for mail that matters. Open source (GPL-3.0-or-later): https://github.com/sarthakdotai/flux
+
+This file is for AI assistants helping someone install Flux. It walks through the whole setup in small steps. Read the rules first, then guide the user one step at a time.
+
+## Rules for the assistant
+
+- **Go one step at a time.** Give the user a single step, wait until they say it worked, then give the next one. Never paste the whole guide at once.
+- **Explain every command in one plain sentence** before the user runs it: what it does and what they should see.
+- **Never ask for a password, app password or code in the chat.** The user types them only into the Terminal prompt or a website. If they paste one into the chat by mistake, tell them to revoke it and create a new one.
+- **Never commit or share private files:** `config.env`, `rules.json`, `.env` and `data/`.
+- **Use the user's words for their accounts.** Some users have only Gmail or only Yahoo; Flux works with either, or both.
+- **When something fails, check the Troubleshooting section below** before improvising.
+
+## What the user needs
+
+- ***A Mac with Apple Silicon*** (M1 or newer) running ***macOS 13 Ventura or newer***.
+- ***A Gmail account, a Yahoo account, or both.***
+- ***A free Apple ID.*** It's only used to sign the app so macOS allows its notifications. No paid developer account.
+- ***About 20 minutes.***
+
+## Step 1: Check the Mac
+
+1. Open **Terminal** (press **⌘ Space**, type ***Terminal***, press **Return**).
+2. Run:
+
+   ```bash
+   sw_vers -productVersion && uname -m
+   ```
+
+3. ***Expect*** a version of **13** or higher and **arm64**. If it says `x86_64`, this Mac has an Intel chip, which Flux doesn't support yet.
+
+## Step 2: Install the tools
+
+Flux needs **Xcode** (for signing and building the Mac app), **Homebrew** and **Node.js 20.11+**.
+
+1. **Xcode:** install it from the **App Store** (search ***Xcode***). It's large; let it finish, then ***open it once*** and accept the license.
+2. **Homebrew:** if `brew --version` prints a version, skip this. Otherwise run the command from https://brew.sh and follow its ***"Next steps"*** at the end.
+3. **Node.js and Git:**
+
+   ```bash
+   brew install node git
+   node --version
+   ```
+
+   ***Expect*** `v20.11` or higher.
+
+## Step 3: Get Flux
+
+```bash
+cd ~
+git clone https://github.com/sarthakdotai/flux.git
+cd flux
+npm ci
+```
+
+***Expect*** `npm ci` to finish with "added … packages". Every later command runs from this `~/flux` folder.
+
+## Step 4: Create an app password for each account
+
+Flux signs in with an **app password**: a separate 16-character password that only works for mail. ***Your normal password is never used and never stored.*** Do this for each account you want in Flux.
+
+**Gmail**
+
+1. Open https://myaccount.google.com/security and make sure **2-Step Verification** is ***On***. App passwords don't exist without it.
+2. Open https://myaccount.google.com/apppasswords.
+3. Type the name ***Flux*** and click **Create**.
+4. Google shows a 16-letter password. ***Keep this page open***: you'll paste it in Step 5, and Google won't show it again.
+
+**Yahoo**
+
+1. Open https://login.yahoo.com/account/security and turn on **2-step verification** if it's off.
+2. On the same page, click **Generate app password** (sometimes under ***"Other ways to sign in"***).
+3. Type the name ***Flux*** and click **Generate password**.
+4. ***Keep this page open*** for Step 5.
+
+## Step 5: Save the app passwords in the Keychain
+
+The macOS Keychain stores the app passwords securely. Flux reads them from there; they're ***never written into any file***.
+
+1. For **Gmail**, run this with ***your own Gmail address***:
+
+   ```bash
+   security add-generic-password -a "you@gmail.com" -s "flux-gmail" -w
+   ```
+
+2. Terminal asks **"password data for new item"**. ***Paste the Gmail app password and press Return.*** It asks again to confirm: paste and press Return once more.
+   - ***Nothing appears while you paste. That's normal***: Terminal hides passwords.
+3. For **Yahoo**, the same with ***your own Yahoo address***:
+
+   ```bash
+   security add-generic-password -a "you@yahoo.com" -s "flux-yahoo" -w
+   ```
+
+4. **Check** both are saved (this shows the entries, ***not*** the passwords):
+
+   ```bash
+   security find-generic-password -s flux-gmail | grep acct
+   security find-generic-password -s flux-yahoo | grep acct
+   ```
+
+   ***Expect*** each to print your address. Only set up one account? Only that one prints, and that's fine.
+
+> **Made a typo in the address?** Delete the entry and add it again: `security delete-generic-password -s flux-gmail`
+
+## Step 6: Get a free signing certificate (for notifications)
+
+***macOS blocks notifications from apps that aren't signed.*** A free Apple ID gives you a signing certificate in a minute.
+
+1. Open **Xcode**, then **Xcode → Settings…** (or press **⌘ ,**).
+2. Go to **Accounts** and click **+** at the bottom left → **Apple ID** → sign in.
+3. Select your name (***Personal Team***), then click **Manage Certificates…**.
+4. Click **+** → **Apple Development** → **Done**.
+5. **Check** it in Terminal:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+   ***Expect*** a line with **"Apple Development: …"**.
+
+**Optional but recommended: give Flux your own app ID.** macOS remembers notification permission per app ID, so pick it before the first build:
+
+```bash
+cp config.example.env config.env
+```
+
+Open `config.env` in any text editor and change ***just this line*** to something unique to you:
+
+```bash
+FLUX_BUNDLE_ID=com.yourname.flux
+```
+
+***If the check in step 5 showed more than one "Apple Development" line***, also remove the `#` in front of `FLUX_SIGN_IDENTITY` and paste ***your*** line there, exactly as shown, including the part in brackets. Leave the server lines commented out.
+
+## Step 7: Build and install Flux
+
+```bash
+mac/build.sh
+```
+
+***Expect*** **"Signing with: Apple Development: …"** and then **"Installed /Applications/Flux.app"**.
+
+- ***If you see "WARNING: no Apple Development identity found"***, go back to Step 6. Flux would still work, but ***without notifications***.
+
+## Step 8: Open Flux and allow notifications
+
+1. Open **Flux** from **Applications** (or **⌘ Space**, type ***Flux***).
+2. macOS asks whether Flux may send notifications. Click **Allow**.
+   - ***The question can appear as a notification banner*** in the top-right corner. Hover over it, click **Options**, then **Allow**.
+   - ***Missed it?*** Open **System Settings → Notifications → Flux** and turn on **Allow notifications**.
+3. Choose the **Alerts** style there if you want OTP codes to ***stay on screen*** until you act on them.
+
+Within a few seconds your inbox appears: ***Gmail and Yahoo in one list***, with a small **G** or **Y** badge on each sender.
+
+## Step 9: Check that notifications work
+
+1. Run:
+
+   ```bash
+   cat ~/Library/Application\ Support/Flux/app.log
+   ```
+
+   ***Expect*** `notification permission: granted`.
+2. **Real test:** from ***another*** account (a friend, or your other address), send yourself an email. Within a minute or two you should get a **Flux** notification.
+
+***What notifies, by design:*** OTP codes (with a **Copy code** button), shipping updates, emails from people, and senders you choose. ***Promotions and newsletters never notify.***
+
+## Step 10: Make it yours (optional)
+
+- **Open Flux at login:** menu **Flux → Open at Login**. ***Recommended***: notifications only arrive while Flux is running.
+- **Choose your important senders:** menu **Server → Open Data Folder**. Copy `rules.example.json` from the `flux` folder into it, rename it `rules.json`, and add addresses under `important.senders` (your bank's alerts, your team…). Quit and reopen Flux.
+- **Learn the keys:** `j`/`k` move · `Return` open · `e` archive · `#` delete · `s` star · `r` reply · `c` compose · `/` search · `x` select.
+
+## Step 11: Updating Flux
+
+```bash
+cd ~/flux
+git pull
+npm ci
+mac/build.sh
+```
+
+Then quit Flux (**⌘ Q**) and open it again.
+
+## Step 12: Run Flux on your own server (optional, advanced)
+
+Flux runs inside the Mac app by default, so ***you don't need a server***. A server only helps if you want Flux running while your Mac is off. Follow **"Run it on your own server"** in the README, then in Flux choose **Server → Remote Server…**.
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| **"Flux needs Node.js"** | Run `brew install node`, then reopen Flux. |
+| **Inbox stays empty, "Couldn't load Gmail/Yahoo"** | The app password or address is wrong. Delete the Keychain entry (Step 5 note), create a ***new*** app password (Step 4) and add it again. |
+| **No notifications** | Check `app.log` (Step 9). If it says ***not granted***: System Settings → Notifications → Flux → Allow. If the build showed the ***WARNING***, do Step 6 and rebuild. |
+| **Notifications stopped after a rebuild** | The app ID changed. Keep `FLUX_BUNDLE_ID` the same in `config.env` and allow Flux again in System Settings. |
+| **A promotion didn't notify** | That's intended. Only OTPs, shipping, people and chosen senders notify. |
+| **"Port 3030 is in use"** | Something else is running Flux (an `npm start` in Terminal?). Stop it with **Ctrl C**, then reopen Flux. |
+| **The server log** | `cat ~/Library/Application\ Support/Flux/server.log` |
+
+## Uninstall
+
+1. Quit Flux and delete **/Applications/Flux.app**.
+2. Remove the Keychain entries: `security delete-generic-password -s flux-gmail` (and `-s flux-yahoo`).
+3. Delete `~/Library/Application Support/Flux` and the `~/flux` folder.
+4. ***Revoke the app passwords*** at https://myaccount.google.com/apppasswords and on Yahoo's Account security page.
+
+## Docs
+
+- [README](https://github.com/sarthakdotai/flux/blob/main/README.md): what Flux is, features, how it works, contributing
+- [rules.example.json](https://github.com/sarthakdotai/flux/blob/main/rules.example.json): the rules that decide Focused, OTP and shipping
+- [config.example.env](https://github.com/sarthakdotai/flux/blob/main/config.example.env): app ID, signing and optional server settings
+- [LICENSE](https://github.com/sarthakdotai/flux/blob/main/LICENSE): GPL-3.0-or-later

@@ -37,8 +37,20 @@ swiftc -O -swift-version 5 -target arm64-apple-macos13.0 \
 cp Info.plist "$APP/Contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$FLUX_BUNDLE_ID" "$APP/Contents/Info.plist"
 
-# Ad-hoc signature: enough for a personal app on this Mac (notifications need a signed bundle).
-codesign --force --deep --sign - "$APP"
+# Signing: macOS only allows notifications from apps with a real signing identity. Use
+# FLUX_SIGN_IDENTITY if set, else the first "Apple Development" identity on this Mac (free:
+# Xcode → Settings → Accounts → add your Apple ID → Manage Certificates → +). With none,
+# sign ad-hoc: the app works, but macOS blocks its notifications.
+if [[ -z "${FLUX_SIGN_IDENTITY:-}" ]]; then
+  FLUX_SIGN_IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
+fi
+if [[ -n "${FLUX_SIGN_IDENTITY:-}" ]]; then
+  echo "Signing with: $FLUX_SIGN_IDENTITY"
+else
+  echo "WARNING: no Apple Development identity found. Flux will run, but macOS will block its notifications." >&2
+  echo "         Fix: Xcode → Settings → Accounts → add your Apple ID → Manage Certificates → + Apple Development, then rebuild." >&2
+fi
+codesign --force --deep --sign "${FLUX_SIGN_IDENTITY:--}" "$APP"
 
 rm -rf /Applications/Flux.app
 cp -R "$APP" /Applications/Flux.app
