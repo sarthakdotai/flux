@@ -8,34 +8,55 @@ import { credentials } from './accounts.js';
 // on the next call. Folders are opened read-write: imapflow fetches with BODY.PEEK, so
 // reading never marks mail as read by itself.
 const pool = new Map();
+// Idle connections die quietly (overnight, network changes) and the next command then
+// hangs until the socket times out. A NOOP heartbeat keeps them alive or finds out early,
+// and a command that takes too long drops its connection so the next call starts fresh.
+const HEARTBEAT_MS = 90_000;
+const COMMAND_TIMEOUT_MS = 25_000;
+
+function drop(account, entry) {
+  if (pool.get(account.id) === entry) pool.delete(account.id);
+  clearInterval(entry.heartbeat);
+  entry.client.close();
+}
 
 function connection(account) {
   const entry = pool.get(account.id);
   if (entry && entry.client.usable !== false) return entry;
+  if (entry) drop(account, entry);
   const { user, pass } = credentials(account.service);
   const client = new ImapFlow({ ...account.imap, secure: true, auth: { user, pass }, logger: false });
   client.on('error', () => {}); // surfaced through the failing command; the next call reconnects
   const fresh = { client, ready: client.connect(), queue: Promise.resolve() };
-  fresh.ready.catch(() => pool.delete(account.id));
+  fresh.ready.catch(() => drop(account, fresh));
+  fresh.heartbeat = setInterval(() => withClient(account, (c) => c.noop()).catch(() => {}), HEARTBEAT_MS);
   pool.set(account.id, fresh);
   return fresh;
 }
 
 // Runs fn(client) on the account's connection, queued behind earlier commands.
-function withClient(account, fn) {
+function withClient(account, fn, { timeout = COMMAND_TIMEOUT_MS } = {}) {
   const entry = connection(account);
-  const run = entry.queue.then(() => entry.ready).then(() => fn(entry.client));
+  const work = entry.queue.then(() => entry.ready).then(() => fn(entry.client));
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      drop(account, entry);
+      reject(new Error(`${account.id} didn't answer in ${timeout / 1000} s`));
+    }, timeout);
+  });
+  const run = Promise.race([work, limit]).finally(() => clearTimeout(timer));
   entry.queue = run.catch(() => {});
-  run.catch(() => { if (entry.client.usable === false) pool.delete(account.id); });
+  run.catch(() => { if (entry.client.usable === false) drop(account, entry); });
   return run;
 }
 
 // Runs fn(client, mailbox) with `folder` selected (re-selected only when it changes).
-function withFolder(account, folder, fn) {
+function withFolder(account, folder, fn, options) {
   return withClient(account, async (client) => {
     if (client.mailbox?.path !== folder) await client.mailboxOpen(folder);
     return fn(client, client.mailbox);
-  });
+  }, options);
 }
 
 function summary(account, folder, msg) {
@@ -46,6 +67,7 @@ function summary(account, folder, msg) {
     uid: msg.uid,
     date: msg.envelope.date,
     from: { name: sender.name || '', address: (sender.address || '').toLowerCase() },
+    to: (msg.envelope.to ?? []).map((t) => ({ name: t.name || '', address: (t.address || '').toLowerCase() })),
     subject: msg.envelope.subject || '(no subject)',
     seen: msg.flags.has('\\Seen'),
     flagged: msg.flags.has('\\Flagged'),
@@ -123,7 +145,9 @@ export function moveMessages(account, folder, uids, destination) {
 // One full message, parsed. Downloading holds the account's connection; parsing doesn't.
 // markSeen flags it as read in the background, so opening never waits for that.
 export async function fetchMessage(account, uid, { markSeen = true, folder = 'INBOX' } = {}) {
-  const source = await withFolder(account, folder, async (client) => (await client.fetchOne(uid, { source: true }, { uid: true }))?.source);
+  // Short timeout and one retry: a stale connection is replaced instead of making you wait.
+  const download = () => withFolder(account, folder, async (client) => (await client.fetchOne(uid, { source: true }, { uid: true }))?.source, { timeout: 8000 });
+  const source = await download().catch(download);
   if (!source) return null;
   if (markSeen) setFlag(account, folder, [uid], '\\Seen', true).catch(() => {});
   const parsed = await simpleParser(source, { skipImageLinks: true });

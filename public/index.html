@@ -29,7 +29,8 @@
     <aside class="sidebar">
       <div class="wordmark">flux<svg class="mark"><use href="#asterisk"/></svg></div>
       <nav id="account-nav">
-        <button class="nav-item active" data-account="all"><span>Inbox</span><span class="count" id="unread-count"></span></button>
+        <button class="nav-item active" data-account="all" data-mailbox="inbox"><span>Inbox</span><span class="count" id="unread-count"></span></button>
+        <button class="nav-item" data-account="all" data-mailbox="sent"><span>Sent</span></button>
         <button class="nav-item" data-account="gmail"><span class="acct gmail" aria-hidden="true">G</span><span>Gmail</span><span class="status" data-status="gmail"></span></button>
         <button class="nav-item" data-account="yahoo"><span class="acct yahoo" aria-hidden="true">Y</span><span>Yahoo</span><span class="status" data-status="yahoo"></span></button>
       </nav>
@@ -41,7 +42,7 @@
       <section id="list-view">
         <header class="main-head">
           <div class="mobile-mark">flux<svg class="mark"><use href="#asterisk"/></svg></div>
-          <h1>Inbox</h1>
+          <h1 id="view-title">Inbox</h1>
           <form class="search" id="search-form" role="search">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
             <input id="search" type="search" placeholder="Search  /" aria-label="Search mail" autocomplete="off">
@@ -54,22 +55,22 @@
           </button>
         </header>
 
-        <div class="smart" id="smart" hidden>
+        <div class="smart inbox-only" id="smart" hidden>
           <button class="chip" id="chip" aria-expanded="false"></button>
           <ul class="shipments" id="shipments" hidden></ul>
         </div>
 
         <div class="toolbar" id="toolbar">
           <button class="check" id="select-all" role="checkbox" aria-checked="false" aria-label="Select all" title="Select all  (⇧A)"></button>
-          <div class="pills" role="tablist" id="pills">
+          <div class="pills inbox-only" role="tablist" id="pills">
             <button class="pill active" data-view="focused" role="tab">Focused</button>
             <button class="pill" data-view="other" role="tab">Other <span class="pill-count" id="other-count"></span></button>
           </div>
           <div class="filters" id="filters">
-            <button class="filter" data-filter="unread" aria-pressed="false">Unread</button>
+            <button class="filter inbox-only" data-filter="unread" aria-pressed="false">Unread</button>
             <button class="filter" data-filter="starred" aria-pressed="false">★ Starred</button>
           </div>
-          <button class="link-btn" id="mark-all-read">Mark all read</button>
+          <button class="link-btn inbox-only" id="mark-all-read">Mark all read</button>
         </div>
 
         <div class="bulkbar" id="bulkbar" hidden>
@@ -79,7 +80,7 @@
             <button data-bulk="read">Mark read</button>
             <button data-bulk="unread">Mark unread</button>
             <button data-bulk="star">Star</button>
-            <button data-bulk="archive">Archive</button>
+            <button data-bulk="archive" class="inbox-only">Archive</button>
             <button data-bulk="trash">Delete</button>
             <button data-bulk="inbox" id="bulk-notspam" hidden>Not spam</button>
           </div>
@@ -101,9 +102,9 @@
           <button class="back" id="back">← Inbox</button>
           <div class="reader-actions">
             <button class="btn-ghost" id="r-star" title="Star  (s)">☆ Star</button>
-            <button class="btn-ghost" id="r-archive" title="Archive  (e)">Archive</button>
+            <button class="btn-ghost inbox-only" id="r-archive" title="Archive  (e)">Archive</button>
             <button class="btn-ghost" id="r-trash" title="Delete  (#)">Delete</button>
-            <button class="btn-ghost" id="mark-unread" title="Mark unread  (⇧U)">Mark unread</button>
+            <button class="btn-ghost inbox-only" id="mark-unread" title="Mark unread  (⇧U)">Mark unread</button>
             <button class="btn-lime" id="reply" title="Reply  (r)">Reply</button>
           </div>
         </header>

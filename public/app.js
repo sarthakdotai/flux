@@ -18,6 +18,7 @@ const refreshBtn = $('refresh');
 const state = {
   messages: [], view: 'focused', account: 'all', smart: null, open: null, search: null, cursor: -1,
   selected: new Set(), anchor: null, filters: { unread: false, starred: false },
+  mailbox: 'inbox', sent: null,
 };
 const keyOf = (m) => `${m.account}:${m.folder}:${m.uid}`;
 
@@ -69,6 +70,9 @@ function avatar(from) {
 // A short message at the bottom; with `action`, it carries a button (Undo) and stays longer.
 // Which inbox an email came from: a lettered badge on the avatar's corner. Not a dot
 // beside the sender, which reads as "unread" in every mail app.
+// Mail Flux pulled out of a spam folder (not Sent, which is also outside the inbox).
+const isFromSpam = (msg) => msg.folder !== 'INBOX' && !msg.sentItem;
+
 function accountBadge(account) {
   const badge = el('span', `acct ${account}`, account === 'gmail' ? 'G' : 'Y');
   badge.title = ACCOUNT_LABEL[account];
@@ -116,10 +120,12 @@ function row(msg, index) {
 
   const body = el('div', 'body');
   const top = el('div', 'top');
-  top.append(el('span', 'sender', msg.from.name || msg.from.address));
+  // In Sent, a row is about who you wrote to.
+  const person = msg.sentItem ? (msg.to[0] ?? { name: '', address: '' }) : msg.from;
+  top.append(el('span', 'sender', msg.sentItem ? `To ${person.name || person.address}` : person.name || person.address));
   if (msg.category === 'otp') top.append(el('span', 'tag otp', 'OTP'));
   if (msg.category === 'shipping') top.append(el('span', 'tag shipping', 'Shipping'));
-  if (msg.folder !== 'INBOX') top.append(el('span', 'tag spam', 'From spam'));
+  if (isFromSpam(msg)) top.append(el('span', 'tag spam', 'From spam'));
   top.title = `${msg.from.address} · ${ACCOUNT_LABEL[msg.account]}`;
   body.append(top, el('div', 'subject', msg.subject));
 
@@ -136,7 +142,7 @@ function row(msg, index) {
   check.setAttribute('role', 'checkbox');
   check.setAttribute('aria-checked', String(selected));
   check.setAttribute('aria-label', 'Select');
-  pick.append(avatar(msg.from), accountBadge(msg.account), check);
+  pick.append(avatar(person), accountBadge(msg.account), check);
 
   li.append(pick, body, meta);
   return li;
@@ -176,7 +182,7 @@ function selectAll(on) {
 }
 
 function selectedMessages() {
-  const pool = state.search ? [...state.search.messages, ...state.messages] : state.messages;
+  const pool = state.search ? [...state.search.messages, ...currentPool()] : currentPool();
   const byKey = new Map(pool.map((m) => [keyOf(m), m]));
   return [...state.selected].map((k) => byKey.get(k)).filter(Boolean);
 }
@@ -194,11 +200,12 @@ const DONE = {
 async function runBulk(action, msgs) {
   if (!msgs.length) return;
   const keys = new Set(msgs.map(keyOf));
-  const pools = [state.messages, state.search?.messages ?? []];
+  const pools = [state.messages, state.sent ?? [], state.search?.messages ?? []];
   if (LOCAL[action]) {
     for (const pool of pools) for (const m of pool) if (keys.has(keyOf(m))) Object.assign(m, LOCAL[action]);
   } else {
     state.messages = state.messages.filter((m) => !keys.has(keyOf(m)));
+    if (state.sent) state.sent = state.sent.filter((m) => !keys.has(keyOf(m)));
     if (state.search) state.search.messages = state.search.messages.filter((m) => !keys.has(keyOf(m)));
   }
   for (const k of keys) state.selected.delete(k);
@@ -252,17 +259,17 @@ function renderSelectionBars(shown) {
   $('select-all').setAttribute('aria-checked', allState);
   $('bulk-all').setAttribute('aria-checked', allState);
   $('bulk-count').textContent = `${state.selected.size} selected`;
-  $('bulk-notspam').hidden = !selectedMessages().some((m) => m.folder !== 'INBOX');
+  $('bulk-notspam').hidden = !selectedMessages().some(isFromSpam);
   $('mark-all-read').disabled = !shown.some((m) => !m.seen);
 }
 
 // What the list shows right now: search results (both tabs), or the Focused/Other tab.
 function visibleMessages() {
-  const pool = state.search ? state.search.messages : state.messages;
+  const pool = state.search ? state.search.messages : currentPool();
   const inAccount = pool.filter((m) => state.account === 'all' || m.account === state.account)
     .filter((m) => (!state.filters.unread || !m.seen) && (!state.filters.starred || m.flagged));
   // Starred spans both tabs, like search: a starred email is wanted wherever it landed.
-  if (state.search || state.filters.starred) return inAccount;
+  if (state.search || state.filters.starred || state.mailbox === 'sent') return inAccount;
   return inAccount.filter((m) => (state.view === 'focused') === m.focused);
 }
 
@@ -278,6 +285,7 @@ function renderList() {
   // Rows rise in on first load only; later refreshes swap in place without flicker.
   if (shown.length && !list.classList.contains('settled')) setTimeout(() => list.classList.add('settled'), 1000);
   const emptyText = state.search ? 'No matches.'
+    : state.mailbox === 'sent' ? 'Nothing sent yet.'
     : state.filters.starred ? 'No starred emails.'
       : state.filters.unread ? 'All caught up.'
         : state.view === 'focused' ? 'Nothing important. Enjoy the quiet.' : 'Nothing here.';
@@ -396,7 +404,7 @@ async function loadSmart() {
 async function refresh() {
   refreshBtn.classList.add('spinning');
   refreshBtn.disabled = true;
-  await Promise.all([loadInbox(), loadSmart()]);
+  await Promise.all([loadInbox(), loadSmart(), state.mailbox === 'sent' ? loadSent() : null]);
   refreshBtn.classList.remove('spinning');
   refreshBtn.disabled = false;
 }
@@ -433,7 +441,7 @@ function renderMessage(msg, allowImages = false) {
   who.append(el('div', 'name', msg.from.name || msg.from.address), el('div', 'addr', msg.from.address));
   from.append(avatar(msg.from), who, el('span', 'time', fullTime(msg.date)));
 
-  const via = `via ${ACCOUNT_LABEL[msg.account]}${msg.folder === 'INBOX' ? '' : ' (found in spam)'}`;
+  const via = `via ${ACCOUNT_LABEL[msg.account]}${isFromSpam(msg) ? ' (found in spam)' : ''}`;
   const to = el('div', 'r-to', `To ${addressList(msg.to)}${msg.cc.length ? ` · Cc ${addressList(msg.cc)}` : ''} · ${via}`);
   const parts = [el('h2', 'r-subject', msg.subject), from, to];
 
@@ -449,6 +457,7 @@ function renderMessage(msg, allowImages = false) {
   } else {
     parts.push(el('div', 'r-text', msg.text || '(empty message)'));
   }
+  parts.at(-1).classList.add('r-body-in');
 
   if (msg.attachments.length) {
     const files = el('ul', 'r-files');
@@ -462,13 +471,34 @@ function renderMessage(msg, allowImages = false) {
   reader.replaceChildren(...parts);
 }
 
+// The header (subject, sender, date) is already in the list, so it shows the instant you
+// click; only the body waits for the server, as a quiet placeholder that fades into the email.
+function renderReaderShell(summary) {
+  const lines = el('div', 'r-loading');
+  for (const width of ['92%', '84%', '96%', '60%']) {
+    const bar = el('div', 'bar');
+    bar.style.width = width;
+    lines.append(bar);
+  }
+  if (!summary) return $('reader').replaceChildren(lines);
+  const person = summary.sentItem ? (summary.to[0] ?? summary.from) : summary.from;
+  const from = el('div', 'r-from');
+  const who = el('div', 'who');
+  who.append(el('div', 'name', person.name || person.address), el('div', 'addr', person.address));
+  from.append(avatar(person), who, el('span', 'time', fullTime(summary.date)));
+  $('reader').replaceChildren(el('h2', 'r-subject', summary.subject), from, el('div', 'r-to', `via ${ACCOUNT_LABEL[summary.account]}`), lines);
+}
+
 async function openMessage(account, uid, folder = 'INBOX') {
+  const summary = [...state.messages, ...(state.sent ?? []), ...(state.search?.messages ?? [])]
+    .find((m) => m.account === account && m.folder === folder && m.uid === uid);
   $('list-view').hidden = true;
   $('reader-view').hidden = false;
-  $('reader').replaceChildren(el('div', 'empty', 'Opening…'));
+  renderReaderShell(summary);
   window.scrollTo(0, 0);
   try {
     const msg = await api(`/api/message/${account}/${uid}?folder=${encodeURIComponent(folder)}`);
+    msg.sentItem = Boolean(summary?.sentItem);
     state.open = msg;
     // The full message doesn't carry flags; take Starred from the list entry.
     msg.flagged = [...state.messages, ...(state.search?.messages ?? [])]
@@ -519,7 +549,7 @@ function replyTo(msg) {
   const quoted = (msg.text || '').trim().split('\n').map((line) => `> ${line}`).join('\n');
   openCompose({
     account: msg.account,
-    to: msg.from.address,
+    to: msg.sentItem ? msg.to.map((t) => t.address).join(', ') : msg.from.address,
     subject: /^re:/i.test(msg.subject) ? msg.subject : `Re: ${msg.subject}`,
     text: `\n\nOn ${fullTime(msg.date)}, ${msg.from.name || msg.from.address} wrote:\n${quoted}`,
     inReplyTo: msg.messageId,
@@ -547,6 +577,8 @@ form.addEventListener('submit', async (event) => {
     });
     closeCompose();
     toast(`Sent from ${ACCOUNT_LABEL[data.account]}`);
+    state.sent = null;
+    if (state.mailbox === 'sent') setTimeout(loadSent, 2500);
   } catch (err) {
     status.className = 'send-status error';
     status.textContent = `Not sent: ${err.message}`;
@@ -570,9 +602,51 @@ $('account-nav').addEventListener('click', (event) => {
   if (!item) return;
   state.account = item.dataset.account;
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n === item));
+  if (item.dataset.mailbox) return switchMailbox(item.dataset.mailbox);
   if (state.open) closeMessage();
   else renderList();
 });
+
+/* ---------- Mailboxes: Inbox (live) and Sent (fetched when opened) ---------- */
+
+function currentPool() {
+  return state.mailbox === 'sent' ? (state.sent ?? []) : state.messages;
+}
+
+function switchMailbox(name) {
+  state.mailbox = name;
+  state.search = null;
+  searchInput.value = '';
+  state.selected.clear();
+  state.cursor = -1;
+  document.body.classList.toggle('sent-view', name === 'sent');
+  $('view-title').textContent = name === 'sent' ? 'Sent' : 'Inbox';
+  if (state.open) {
+    state.open = null;
+    $('reader-view').hidden = true;
+    $('list-view').hidden = false;
+  }
+  if (name === 'sent') {
+    if (state.sent) renderList();
+    else renderSkeleton();
+    loadSent();
+  } else {
+    renderList();
+  }
+}
+
+// Sent isn't kept live, so it's fetched when you open it, then kept until you send again.
+async function loadSent() {
+  try {
+    const data = await api('/api/sent?limit=50');
+    state.sent = data.messages.map((m) => ({ ...m, sentItem: true }));
+    if (data.errors.length) toast(`Couldn’t load Sent for ${data.errors.map((e) => ACCOUNT_LABEL[e.account]).join(', ')}`);
+  } catch (err) {
+    state.sent = state.sent ?? [];
+    toast(`Couldn’t load Sent: ${err.message}`);
+  }
+  if (state.mailbox === 'sent' && !state.open) renderList();
+}
 
 /* ---------- Search: instant filter while typing, full search on Enter ---------- */
 
@@ -581,7 +655,7 @@ const searchInput = $('search');
 searchInput.addEventListener('input', () => {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) return clearSearch();
-  const matches = state.messages.filter((m) => `${m.from.name} ${m.from.address} ${m.subject}`.toLowerCase().includes(q));
+  const matches = currentPool().filter((m) => `${m.from.name} ${m.from.address} ${m.subject}`.toLowerCase().includes(q));
   state.search = { query: searchInput.value.trim(), messages: matches };
   state.cursor = -1;
   if (state.open) closeMessage();
@@ -591,7 +665,7 @@ searchInput.addEventListener('input', () => {
 $('search-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const q = searchInput.value.trim();
-  if (q.length < 2) return;
+  if (q.length < 2 || state.mailbox === 'sent') return; // Sent filters as you type
   $('results-label').textContent = `Searching all mail for “${q}”…`;
   try {
     const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
@@ -725,7 +799,7 @@ function startLiveUpdates() {
     const { message } = JSON.parse(event.data);
     if (state.messages.some((m) => keyOf(m) === keyOf(message))) return;
     state.messages = [message, ...state.messages].sort((a, b) => new Date(b.date) - new Date(a.date));
-    if (!state.search) renderList();
+    if (!state.search && state.mailbox === 'inbox') renderList();
     if (message.category === 'shipping' || message.category === 'otp') loadSmart();
   };
 }
@@ -806,5 +880,7 @@ setInterval(() => { if (!document.hidden && !refreshBtn.disabled) refresh(); }, 
 setInterval(renderSmart, 30_000);
 refresh();
 startLiveUpdates();
+// Warm Sent in the background so opening it is instant.
+setTimeout(() => { if (!state.sent) loadSent(); }, 4000);
 setupPush().catch(() => { bell.hidden = true; });
 openFromHash();

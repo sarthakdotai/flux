@@ -230,3 +230,12 @@ kbd { font-family: inherit; font-size: 11px; background: #EAE8E0; border-radius:
   .sheet-backdrop { padding: 0; align-items: end; }
   .sheet { border-radius: 24px 24px 0 0; max-height: 92vh; }
 }
+
+/* Sent view: inbox-only controls (Focused/Other, smart chip, archive…) step aside. */
+body.sent-view .inbox-only { display: none !important; }
+
+/* Reader: header shows at once; the body fades in when it arrives. */
+.r-loading { background: #fff; border-radius: 16px; padding: 24px; }
+.r-loading .bar { height: 12px; border-radius: 6px; background: #ECEAE2; margin-bottom: 12px; animation: pulse 1.2s ease-in-out infinite; }
+.r-body-in { animation: body-in 0.35s var(--ease-out) both; }
+@keyframes body-in { from { opacity: 0; transform: translateY(4px); } }

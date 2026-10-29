@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ACCOUNTS, account } from './accounts.js';
-import { fetchMessage, searchInbox, setSeen, setFlag, specialFolder, moveMessages } from './imap.js';
+import { fetchInbox, fetchMessage, searchInbox, setSeen, setFlag, specialFolder, moveMessages } from './imap.js';
 import { sendMail } from './smtp.js';
 import { classify, isShipping, shipments, freshOtps, extractOtp, messageText, shippingCriteria, shippingSince } from './smart.js';
 import { MailStore } from './store.js';
@@ -30,10 +30,12 @@ function send(res, status, body) {
 
 const byDateDesc = (a, b) => new Date(b.date) - new Date(a.date);
 
-function folderFor(accountId, folder = 'INBOX') {
+// Folders Flux may read or act on: the inbox, the spam folder it scans, and Sent.
+async function folderFor(accountId, folder = 'INBOX') {
   const a = account(accountId);
-  if (folder !== 'INBOX' && folder !== a.spamFolder) throw new Error(`Unknown folder ${folder}`);
-  return a;
+  if (folder === 'INBOX' || folder === a.spamFolder) return a;
+  if (folder === await specialFolder(a, '\\Sent').catch(() => null)) return a;
+  throw new Error(`Unknown folder ${folder}`);
 }
 
 /* ---------- New mail: live UI update + push notification ---------- */
@@ -87,13 +89,24 @@ function cachedMessage(a, uid, folder) {
 // With &prefetch=1 it only warms the cache (sent on hover) and leaves it unread.
 async function message(accountId, uid, url, res) {
   const folder = url.searchParams.get('folder') ?? 'INBOX';
-  const a = folderFor(accountId, folder);
+  const a = await folderFor(accountId, folder);
   const msg = await cachedMessage(a, Number(uid), folder);
   if (!msg) return send(res, 404, { error: 'Message not found' });
   if (url.searchParams.get('prefetch')) return send(res, 200, { ok: true });
   store.setSeen(accountId, folder, Number(uid), true);
   setSeen(a, Number(uid), true, folder).catch(() => {});
   send(res, 200, msg);
+}
+
+// GET /api/sent?limit=50 -> newest sent mail from every account. Fetched when you open
+// Sent (not kept live like the inbox); Gmail's is [Gmail]/Sent Mail, Yahoo's is Sent.
+async function sent(url, res) {
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 50, MAX_LIMIT);
+  const results = await Promise.allSettled(ACCOUNTS.map(async (a) => fetchInbox(a, limit, await specialFolder(a, '\\Sent'))));
+  const messages = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+    .map((m) => ({ ...m, seen: true, focused: true, category: null }));
+  const errors = results.flatMap((r, i) => (r.status === 'rejected' ? [{ account: ACCOUNTS[i].id, error: r.reason.message }] : []));
+  send(res, 200, { messages: messages.sort(byDateDesc).slice(0, limit), errors });
 }
 
 // GET /api/search?q= -> sender or subject matches across both inboxes (last 12 months),
@@ -176,7 +189,7 @@ async function sendRoute(req, res) {
 // POST /api/seen {account, folder, uid, seen}
 async function seenRoute(req, res) {
   const { account: accountId, folder = 'INBOX', uid, seen } = await readJson(req);
-  await setSeen(folderFor(accountId, folder), Number(uid), Boolean(seen), folder);
+  await setSeen(await folderFor(accountId, folder), Number(uid), Boolean(seen), folder);
   store.setSeen(accountId, folder, Number(uid), Boolean(seen));
   send(res, 200, { ok: true });
 }
@@ -214,10 +227,10 @@ async function bulkRoute(req, res) {
   for (const { id, folder, uids } of groups.values()) {
     if (FLAG_ACTIONS[action]) {
       const [flag, on, fields] = FLAG_ACTIONS[action];
-      await setFlag(folderFor(id, folder), folder, uids, flag, on);
+      await setFlag(await folderFor(id, folder), folder, uids, flag, on);
       store.update(id, folder, uids, fields);
     } else if (MOVE_ACTIONS[action]) {
-      const a = folderFor(id, folder);
+      const a = await folderFor(id, folder);
       const destination = await MOVE_ACTIONS[action](a);
       if (destination === folder) continue;
       const newUids = await moveMessages(a, folder, uids, destination);
@@ -230,7 +243,7 @@ async function bulkRoute(req, res) {
       const a = account(id);
       const allowed = [await specialFolder(a, a.id === 'gmail' ? '\\All' : '\\Archive'), await specialFolder(a, '\\Trash'), 'INBOX'];
       if (!allowed.includes(folder)) throw new Error(`Can't restore from ${folder}`);
-      folderFor(id, to); // only back to INBOX or the spam folder
+      await folderFor(id, to); // only back to the inbox, spam or Sent
       const back = await moveMessages(a, folder, uids, to);
       store.suppress(id, to, back.filter(Boolean));
       // Put restored mail straight back in the list: Gmail can take ~30 s to tell the live
@@ -285,6 +298,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/api/inbox') return await inbox(url, res);
       if (url.pathname === '/api/smart') return await smart(res);
       if (url.pathname === '/api/search') return await search(url, res);
+      if (url.pathname === '/api/sent') return await sent(url, res);
       if (url.pathname === '/api/events') return events(req, res);
       if (url.pathname === '/api/push/key') return send(res, 200, { publicKey });
       const msgMatch = url.pathname.match(/^\/api\/message\/(\w+)\/(\d+)$/);
