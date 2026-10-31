@@ -2,6 +2,7 @@
 // OTP extraction. Every decision is a rule from rules.json, never a guess.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { senderChoice } from './senders.js';
 
 // Your own rules: FLUX_RULES (the Mac app points it at Application Support), else
 // rules.json beside the code (git-ignored), else the generic example.
@@ -35,15 +36,23 @@ function isImportant(address) {
 
 // category: 'otp' | 'shipping' | 'important' | null. Focused = has a category, or comes
 // from an account that is always focused (Gmail). Yahoo noise lands in Other.
+// Newsletter = mailing-list mail (msg.list: it has a List-Unsubscribe or List-ID header), or
+// a sender in rules.newsletters for the few that have neither. Only mail with no category
+// counts, so OTPs, shipping and important senders never get filed away.
+// A sender you moved by hand beats all of this, except that OTPs and shipping stay tagged.
 export function classify(msg) {
+  const choice = senderChoice(msg.from.address);
   const ignored = rules.ignore.senders.includes(msg.from.address) || inDomains(msg.from.address, rules.ignore.domains);
   let category = null;
   if (!ignored) {
     if (isOtp(msg)) category = 'otp';
     else if (isShipping(msg)) category = 'shipping';
-    else if (isImportant(msg.from.address)) category = 'important';
+    else if (choice === 'focused' || (choice !== 'other' && isImportant(msg.from.address))) category = 'important';
   }
-  return { ...msg, category, focused: category !== null || rules.focusedAccounts.includes(msg.account) };
+  const listed = msg.list || inDomains(msg.from.address, rules.newsletters?.domains ?? []);
+  const newsletter = Boolean(listed) && category === null && !choice;
+  const focused = choice ? choice === 'focused' : !newsletter && (category !== null || rules.focusedAccounts.includes(msg.account));
+  return { ...msg, category, newsletter, focused };
 }
 
 // IMAP search criteria (any-of) for the server-side searches.

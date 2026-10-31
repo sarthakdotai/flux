@@ -19,6 +19,9 @@
       "protonmail.com"
     ]
   },
+  "newsletters": {
+    "domains": []
+  },
   "ignore": {
     "senders": [],
     "domains": [

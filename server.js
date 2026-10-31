@@ -8,6 +8,7 @@ import { classify, isShipping, shipments, freshOtps, extractOtp, messageText, sh
 import { MailStore } from './store.js';
 import { notification } from './notify.js';
 import { publicKey, subscribe, pushAll } from './push.js';
+import { rememberSenders } from './senders.js';
 
 const PORT = 3030;
 const MAX_LIMIT = 200;
@@ -30,11 +31,17 @@ function send(res, status, body) {
 
 const byDateDesc = (a, b) => new Date(b.date) - new Date(a.date);
 
-// Folders Flux may read or act on: the inbox, the spam folder it scans, and Sent.
+// The folders Flux shows, found by their IMAP special-use flag. Gmail has no Archive
+// folder: archiving just takes mail out of the inbox, so it lives in All Mail.
+const MAILBOXES = { sent: '\\Sent', drafts: '\\Drafts', spam: '\\Junk', archive: '\\Archive', trash: '\\Trash' };
+const mailboxPath = (a, name) => specialFolder(a, a.id === 'gmail' && name === 'archive' ? '\\All' : MAILBOXES[name]);
+
+// Folders Flux may read or act on: the inbox and the folders above.
 async function folderFor(accountId, folder = 'INBOX') {
   const a = account(accountId);
-  if (folder === 'INBOX' || folder === a.spamFolder) return a;
-  if (folder === await specialFolder(a, '\\Sent').catch(() => null)) return a;
+  if (folder === 'INBOX') return a;
+  const known = await Promise.all(Object.keys(MAILBOXES).map((name) => mailboxPath(a, name).catch(() => null)));
+  if (known.includes(folder)) return a;
   throw new Error(`Unknown folder ${folder}`);
 }
 
@@ -98,15 +105,26 @@ async function message(accountId, uid, url, res) {
   send(res, 200, msg);
 }
 
-// GET /api/sent?limit=50 -> newest sent mail from every account. Fetched when you open
-// Sent (not kept live like the inbox); Gmail's is [Gmail]/Sent Mail, Yahoo's is Sent.
-async function sent(url, res) {
-  const limit = Math.min(Number(url.searchParams.get('limit')) || 50, MAX_LIMIT);
-  const results = await Promise.allSettled(ACCOUNTS.map(async (a) => fetchInbox(a, limit, await specialFolder(a, '\\Sent'))));
+// All Mail also holds the inbox and Sent; what's left once they're excluded is the archive.
+const GMAIL_ARCHIVED = '-in:inbox -in:sent -in:drafts';
+
+async function folderMessages(a, name, limit) {
+  const folder = await mailboxPath(a, name);
+  if (a.id === 'gmail' && name === 'archive') return searchInbox(a, [{ gmraw: GMAIL_ARCHIVED }], null, folder, limit);
+  return fetchInbox(a, limit, folder);
+}
+
+// GET /api/folder/:name?limit=100 -> newest mail in a folder, up to `limit` per account.
+// Fetched when you open it (not kept live like the inbox).
+async function folderRoute(name, url, res) {
+  if (!Object.hasOwn(MAILBOXES, name)) return send(res, 404, { error: 'Unknown folder' });
+  const limit = Math.min(Number(url.searchParams.get('limit')) || 100, MAX_LIMIT);
+  const results = await Promise.allSettled(ACCOUNTS.map((a) => folderMessages(a, name, limit)));
+  const outgoing = name === 'sent' || name === 'drafts';
   const messages = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
-    .map((m) => ({ ...m, seen: true, focused: true, category: null }));
+    .map((m) => (outgoing ? { ...m, seen: true, focused: true, category: null } : { ...classify(m), focused: true }));
   const errors = results.flatMap((r, i) => (r.status === 'rejected' ? [{ account: ACCOUNTS[i].id, error: r.reason.message }] : []));
-  send(res, 200, { messages: messages.sort(byDateDesc).slice(0, limit), errors });
+  send(res, 200, { messages: messages.sort(byDateDesc), errors });
 }
 
 // GET /api/search?q= -> sender or subject matches across both inboxes (last 12 months),
@@ -205,8 +223,8 @@ const FLAG_ACTIONS = {
 };
 // Where each move goes. Delete moves to Trash (recoverable there), never erases.
 const MOVE_ACTIONS = {
-  archive: (a) => specialFolder(a, a.id === 'gmail' ? '\\All' : '\\Archive'),
-  trash: (a) => specialFolder(a, '\\Trash'),
+  archive: (a) => mailboxPath(a, 'archive'),
+  trash: (a) => mailboxPath(a, 'trash'),
   inbox: async () => 'INBOX',
 };
 
@@ -241,9 +259,9 @@ async function bulkRoute(req, res) {
       undo.push({ account: id, folder: destination, uids: newUids.filter(Boolean), to: folder });
     } else if (action === 'restore') {
       const a = account(id);
-      const allowed = [await specialFolder(a, a.id === 'gmail' ? '\\All' : '\\Archive'), await specialFolder(a, '\\Trash'), 'INBOX'];
+      const allowed = [await mailboxPath(a, 'archive'), await mailboxPath(a, 'trash'), 'INBOX'];
       if (!allowed.includes(folder)) throw new Error(`Can't restore from ${folder}`);
-      await folderFor(id, to); // only back to the inbox, spam or Sent
+      await folderFor(id, to); // only back to a folder Flux knows
       const back = await moveMessages(a, folder, uids, to);
       store.suppress(id, to, back.filter(Boolean));
       // Put restored mail straight back in the list: Gmail can take ~30 s to tell the live
@@ -258,6 +276,18 @@ async function bulkRoute(req, res) {
     }
   }
   if (action === 'archive' || action === 'trash' || action === 'inbox') shippingCache = null;
+  send(res, 200, { ok: true, undo });
+}
+
+// POST /api/senders {senders: [{address, focus}]} -> remembers where a sender's mail goes.
+// focus: 'focused', 'other' or null (forget). Returns `undo`, the previous choices.
+async function sendersRoute(req, res) {
+  const { senders } = await readJson(req);
+  const valid = Array.isArray(senders) && senders.length > 0 && senders.length <= 500
+    && senders.every((s) => typeof s.address === 'string' && s.address.includes('@') && ['focused', 'other', null].includes(s.focus));
+  if (!valid) return send(res, 400, { error: 'Bad senders' });
+  const undo = rememberSenders(senders);
+  store.reclassify();
   send(res, 200, { ok: true, undo });
 }
 
@@ -283,7 +313,7 @@ async function staticFile(url, res) {
   }
 }
 
-const POST_ROUTES = { '/api/send': sendRoute, '/api/seen': seenRoute, '/api/bulk': bulkRoute, '/api/push/subscribe': subscribeRoute };
+const POST_ROUTES = { '/api/send': sendRoute, '/api/seen': seenRoute, '/api/bulk': bulkRoute, '/api/senders': sendersRoute, '/api/push/subscribe': subscribeRoute };
 
 const server = http.createServer(async (req, res) => {
   // Only this machine's own Flux page may talk to the server: blocks other websites from
@@ -298,9 +328,10 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/api/inbox') return await inbox(url, res);
       if (url.pathname === '/api/smart') return await smart(res);
       if (url.pathname === '/api/search') return await search(url, res);
-      if (url.pathname === '/api/sent') return await sent(url, res);
       if (url.pathname === '/api/events') return events(req, res);
       if (url.pathname === '/api/push/key') return send(res, 200, { publicKey });
+      const folderMatch = url.pathname.match(/^\/api\/folder\/(\w+)$/);
+      if (folderMatch) return await folderRoute(folderMatch[1], url, res);
       const msgMatch = url.pathname.match(/^\/api\/message\/(\w+)\/(\d+)$/);
       if (msgMatch) return await message(msgMatch[1], msgMatch[2], url, res);
       return await staticFile(url, res);

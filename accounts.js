@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 const PROVIDERS = [
   {
     id: 'gmail', service: 'flux-gmail',
+    // Scanned for shipping and OTP mail only, like Yahoo's Bulk.
+    spamFolder: '[Gmail]/Spam',
     imap: { host: 'imap.gmail.com', port: 993 },
     smtp: { host: 'smtp.gmail.com', port: 465 },
   },

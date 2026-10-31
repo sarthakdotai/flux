@@ -11,9 +11,15 @@ const KEEP = { INBOX: 200, spam: 1000 };
 const RESYNC_MS = 5 * 60_000;
 const MAX_BACKOFF_MS = 60_000;
 
+const FIELDS = { uid: true, envelope: true, flags: true };
+
 const keepFromSpam = (m) => m.category === 'shipping' || m.category === 'otp';
 
-function summary(account, folder, msg) {
+// Mailing-list mail. Needs the full header: Yahoo leaves List-Unsubscribe out when asked for
+// just that field, and a full header takes 70 ms there, so each is read once and remembered.
+const isListMail = (msg) => /^list-(unsubscribe|id):/im.test(msg.headers?.toString() ?? '');
+
+function summary(account, folder, msg, list) {
   const sender = msg.envelope.from?.[0] ?? {};
   return classify({
     account: account.id,
@@ -24,12 +30,13 @@ function summary(account, folder, msg) {
     subject: msg.envelope.subject || '(no subject)',
     seen: msg.flags.has('\\Seen'),
     flagged: msg.flags.has('\\Flagged'),
+    list,
   });
 }
 
 class Source {
   constructor(store, account, folder) {
-    Object.assign(this, { store, account, folder, messages: new Map(), maxUid: 0, error: null, backoff: 5000, ready: false });
+    Object.assign(this, { store, account, folder, messages: new Map(), lists: new Map(), maxUid: 0, error: null, backoff: 5000, ready: false });
     this.limit = folder === 'INBOX' ? KEEP.INBOX : KEEP.spam;
   }
 
@@ -79,8 +86,8 @@ class Source {
     const next = new Map();
     if (box.exists > 0) {
       const from = Math.max(1, box.exists - this.limit + 1);
-      for await (const msg of this.client.fetch(`${from}:*`, { uid: true, envelope: true, flags: true })) {
-        const m = summary(this.account, this.folder, msg);
+      for await (const msg of this.client.fetch(`${from}:*`, FIELDS)) {
+        const m = summary(this.account, this.folder, msg, this.lists.get(msg.uid));
         if (!this.keep(m)) continue;
         next.set(m.uid, m);
         if (previousMax && msg.uid > previousMax) this.announce(m);
@@ -88,6 +95,24 @@ class Source {
       this.maxUid = Math.max(this.maxUid, box.uidNext - 1);
     }
     this.messages = next;
+    this.findLists().catch((err) => { this.error = err.message; });
+  }
+
+  // Reads headers for mail not seen yet, in the background so the inbox never waits for it.
+  async findLists() {
+    const unknown = [...this.messages.keys()].filter((uid) => !this.lists.has(uid));
+    if (this.folder !== 'INBOX' || this.findingLists || !unknown.length) return;
+    this.findingLists = true;
+    try {
+      for await (const msg of this.client.fetch(unknown, { uid: true, headers: true }, { uid: true })) {
+        const list = isListMail(msg);
+        this.lists.set(msg.uid, list);
+        const m = this.messages.get(msg.uid);
+        if (m) this.messages.set(msg.uid, classify({ ...m, list }));
+      }
+    } finally {
+      this.findingLists = false;
+    }
   }
 
   // Each message is announced once, whether IDLE or a resync saw it first.
@@ -100,10 +125,12 @@ class Source {
 
   async fetchNew() {
     if (!this.maxUid) return this.resync();
-    for await (const msg of this.client.fetch(`${this.maxUid + 1}:*`, { uid: true, envelope: true, flags: true }, { uid: true })) {
+    for await (const msg of this.client.fetch(`${this.maxUid + 1}:*`, { ...FIELDS, headers: true }, { uid: true })) {
       if (msg.uid <= this.maxUid) continue; // "N:*" always returns the last message
       this.maxUid = msg.uid;
-      const m = summary(this.account, this.folder, msg);
+      const list = isListMail(msg);
+      this.lists.set(msg.uid, list);
+      const m = summary(this.account, this.folder, msg, list);
       if (!this.keep(m)) continue;
       this.messages.set(m.uid, m);
       this.announce(m);
@@ -158,6 +185,13 @@ export class MailStore extends EventEmitter {
     for (const uid of uids) {
       const m = source?.messages.get(uid);
       if (m) Object.assign(m, fields);
+    }
+  }
+
+  // Re-sorts everything already loaded, after a sender was moved by hand.
+  reclassify() {
+    for (const source of this.sources) {
+      for (const [uid, m] of source.messages) source.messages.set(uid, classify(m));
     }
   }
 

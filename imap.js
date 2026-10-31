@@ -102,7 +102,7 @@ export function searchInbox(account, criteria, since, folder = 'INBOX', max = In
     // UIDs are merged. Yahoo also matches whole words only: callers re-check results.
     const found = new Set();
     for (const criterion of criteria) {
-      for (const uid of (await client.search({ ...criterion, since }, { uid: true })) || []) found.add(uid);
+      for (const uid of (await client.search(since ? { ...criterion, since } : criterion, { uid: true })) || []) found.add(uid);
     }
     const uids = [...found].sort((a, b) => a - b).slice(-max);
     if (!uids.length) return [];
