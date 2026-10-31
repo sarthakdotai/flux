@@ -7,47 +7,53 @@ import { credentials } from './accounts.js';
 // Commands on a connection run one at a time (a queue); a dropped connection is replaced
 // on the next call. Folders are opened read-write: imapflow fetches with BODY.PEEK, so
 // reading never marks mail as read by itself.
+// Slow background work (the shipping search takes ~7 s on Yahoo) runs on a second
+// connection, the 'background' lane, so it never makes opening a mail wait.
 const pool = new Map();
 // Idle connections die quietly (overnight, network changes) and the next command then
 // hangs until the socket times out. A NOOP heartbeat keeps them alive or finds out early,
 // and a command that takes too long drops its connection so the next call starts fresh.
 const HEARTBEAT_MS = 90_000;
+const HEARTBEAT_TIMEOUT_MS = 8000;
 const COMMAND_TIMEOUT_MS = 25_000;
 
-function drop(account, entry) {
-  if (pool.get(account.id) === entry) pool.delete(account.id);
+function drop(entry) {
+  if (pool.get(entry.key) === entry) pool.delete(entry.key);
   clearInterval(entry.heartbeat);
   entry.client.close();
 }
 
-function connection(account) {
-  const entry = pool.get(account.id);
+function connection(account, lane) {
+  const key = `${account.id}:${lane}`;
+  const entry = pool.get(key);
   if (entry && entry.client.usable !== false) return entry;
-  if (entry) drop(account, entry);
+  if (entry) drop(entry);
   const { user, pass } = credentials(account.service);
   const client = new ImapFlow({ ...account.imap, secure: true, auth: { user, pass }, logger: false });
   client.on('error', () => {}); // surfaced through the failing command; the next call reconnects
-  const fresh = { client, ready: client.connect(), queue: Promise.resolve() };
-  fresh.ready.catch(() => drop(account, fresh));
-  fresh.heartbeat = setInterval(() => withClient(account, (c) => c.noop()).catch(() => {}), HEARTBEAT_MS);
-  pool.set(account.id, fresh);
+  const fresh = { key, client, ready: client.connect(), queue: Promise.resolve() };
+  fresh.ready.catch(() => drop(fresh));
+  fresh.heartbeat = setInterval(() => withClient(account, (c) => c.noop(), { lane, timeout: HEARTBEAT_TIMEOUT_MS }).catch(() => {}), HEARTBEAT_MS);
+  pool.set(key, fresh);
   return fresh;
 }
 
-// Runs fn(client) on the account's connection, queued behind earlier commands.
-function withClient(account, fn, { timeout = COMMAND_TIMEOUT_MS } = {}) {
-  const entry = connection(account);
-  const work = entry.queue.then(() => entry.ready).then(() => fn(entry.client));
-  let timer;
-  const limit = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      drop(account, entry);
-      reject(new Error(`${account.id} didn't answer in ${timeout / 1000} s`));
-    }, timeout);
+// Runs fn(client) on the account's connection, queued behind earlier commands in its lane.
+// The time limit starts at the command's turn: waiting in line isn't a stalled connection.
+function withClient(account, fn, { timeout = COMMAND_TIMEOUT_MS, lane = 'main' } = {}) {
+  const entry = connection(account, lane);
+  const run = entry.queue.then(() => {
+    let timer;
+    const limit = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        drop(entry);
+        reject(new Error(`${account.id} didn't answer in ${timeout / 1000} s`));
+      }, timeout);
+    });
+    return Promise.race([entry.ready.then(() => fn(entry.client)), limit]).finally(() => clearTimeout(timer));
   });
-  const run = Promise.race([work, limit]).finally(() => clearTimeout(timer));
   entry.queue = run.catch(() => {});
-  run.catch(() => { if (entry.client.usable === false) drop(account, entry); });
+  run.catch(() => { if (entry.client.usable === false) drop(entry); });
   return run;
 }
 
@@ -90,7 +96,7 @@ export function fetchInbox(account, limit, folder = 'INBOX') {
 // Summaries of messages matching any of `criteria` (imapflow search objects) since `since`.
 // The server does the searching, so this reaches past the newest-N window.
 // `max` keeps only the newest matches, so a broad search doesn't fetch thousands of envelopes.
-export function searchInbox(account, criteria, since, folder = 'INBOX', max = Infinity) {
+export function searchInbox(account, criteria, since, folder = 'INBOX', max = Infinity, options) {
   return withFolder(account, folder, async (client) => {
     // Yahoo's OR both misses and over-matches, so each criterion is its own search and the
     // UIDs are merged. Yahoo also matches whole words only: callers re-check results.
@@ -105,7 +111,7 @@ export function searchInbox(account, criteria, since, folder = 'INBOX', max = In
       messages.push(summary(account, folder, msg));
     }
     return messages;
-  });
+  }, options);
 }
 
 export function setSeen(account, uid, seen, folder = 'INBOX') {

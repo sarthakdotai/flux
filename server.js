@@ -136,7 +136,7 @@ const otpCodes = new Map();
 async function activeShipments() {
   if (shippingCache && Date.now() - shippingCache.at < SHIPPING_CACHE_MS) return shippingCache;
   const since = shippingSince();
-  const results = await Promise.allSettled(ACCOUNTS.map((a) => searchInbox(a, shippingCriteria, since)));
+  const results = await Promise.allSettled(ACCOUNTS.map((a) => searchInbox(a, shippingCriteria, since, 'INBOX', Infinity, { lane: 'background' })));
   const fromSpam = store.messages().filter((m) => m.folder !== 'INBOX' && isShipping(m) && new Date(m.date) >= since);
   const fromInbox = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
   const errors = results.flatMap((r, i) => (r.status === 'rejected' ? [{ account: ACCOUNTS[i].id, error: r.reason.message }] : []));
